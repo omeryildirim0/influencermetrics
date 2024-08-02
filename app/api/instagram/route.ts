@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
-import axios from 'axios';
+import { NextRequest, NextResponse } from 'next/server';
+import { ApifyClient } from 'apify-client';
 
-export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url);
+// Function to handle GET requests
+export const GET = async (req: NextRequest) => {
+    const { searchParams } = new URL(req.url);
     const username = searchParams.get('username');
 
     if (!username) {
@@ -12,40 +13,50 @@ export async function GET(request: Request) {
     const apifyToken = process.env.APIFY_API_TOKEN;
 
     if (!apifyToken) {
-        console.error('APIFY_API_TOKEN is not set');
         return NextResponse.json({ error: 'Internal Server Error: Missing APIFY_API_TOKEN' }, { status: 500 });
     }
 
     try {
-        const apifyActId = 'apify~instagram-profile-scraper'; // Correct actor ID with tilde (~)
-        const runResponse = await axios.post(
-            `https://api.apify.com/v2/acts/${apifyActId}/runs?token=${apifyToken}`,
-            { usernames: [username] } // Updated payload to match API requirements
-        );
+        // Initialize Apify Client
+        const client = new ApifyClient({
+            token: apifyToken,
+        });
 
-        const { data: run } = runResponse;
-        console.log('Run started:', run);
+        // Prepare Actor input
+        const input = {
+            usernames: [username],
+        };
 
-        let result;
-        let runStatus;
-        do {
-            const runDetails = await axios.get(
-                `https://api.apify.com/v2/acts/${apifyActId}/runs/${run.data.id}?token=${apifyToken}`
-            );
-            console.log('Run details:', runDetails.data);
+        // Run the Actor and wait for it to finish
+        const run = await client.actor('apify~instagram-profile-scraper').call(input);
 
-            runStatus = runDetails.data.status;
-            if (runStatus === 'SUCCEEDED') {
-                result = runDetails.data.output.body;
-            } else if (runStatus === 'FAILED') {
-                return NextResponse.json({ error: 'Scraping failed' }, { status: 500 });
-            }
-        } while (runStatus !== 'SUCCEEDED');
+        // Function to delay execution
+        const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-        return NextResponse.json(result, { status: 200 });
-    } catch (unknownError) {
-        const error = unknownError as { response?: { data: any }, message: string };
-        console.error('Error in API:', error.response ? error.response.data : error.message);
+        // Poll for run status
+        let runStatus = run.status;
+        while (runStatus !== 'SUCCEEDED' && runStatus !== 'FAILED') {
+            console.log(`Current run status: ${runStatus}. Waiting for completion...`);
+            await delay(5000); // Wait for 5 seconds
+
+            const runDetails = await client.run(run.id).get();
+            runStatus = runDetails.status;
+        }
+
+        if (runStatus === 'FAILED') {
+            return NextResponse.json({ error: 'Run failed' }, { status: 500 });
+        }
+
+        // Fetch and print Actor results from the run's dataset
+        const { items } = await client.dataset(run.defaultDatasetId).listItems();
+
+        // Log the output to the console
+        console.log('Results from dataset', items);
+
+        // Return the output as the response
+        return NextResponse.json(items, { status: 200 });
+    } catch (error) {
+        console.error('Error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
-}
+};
