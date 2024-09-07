@@ -40,8 +40,15 @@ export const GET = async (req: NextRequest) => {
             await delay(5000); // Wait for 5 seconds
 
             const runDetails = await client.run(run.id).get();
+
+            // Check if runDetails is undefined
+            if (!runDetails) {
+                return NextResponse.json({ error: 'Unable to fetch run details' }, { status: 500 });
+            }
+
             runStatus = runDetails.status;
         }
+
 
         if (runStatus === 'FAILED') {
             return NextResponse.json({ error: 'Run failed' }, { status: 500 });
